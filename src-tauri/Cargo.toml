@@ -1,0 +1,43 @@
+[package]
+name = "oncue"
+version = "0.1.0"
+description = "Subtitle resync and bilingual generation for macOS"
+authors = ["xufanglin"]
+edition = "2024"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "oncue_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "fs", "process", "sync"] }
+reqwest = { version = "0.13.3", default-features = false, features = ["json", "rustls", "stream"] }
+anyhow = "1.0.102"
+thiserror = "2.0.18"
+tracing = "0.1.44"
+async-trait = "0.1.89"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+tokio-util = { version = "0.7.18", features = ["rt"] }
+sha2 = "0.11.0"
+chardetng = "1.0.0"
+encoding_rs = "0.8.35"
+dirs = "6.0.0"
+whisper-rs = { version = "0.16.0", features = ["metal", "coreml"] }
+tauri-plugin-shell = "2.3.5"
+tauri-plugin-fs = "2.5.1"
+tauri-plugin-dialog = "2.7.1"
+futures-util = "0.3"
+hound = "3.5"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
