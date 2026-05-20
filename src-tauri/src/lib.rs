@@ -31,7 +31,6 @@ pub fn run() {
             commands::pipeline::cancel_pipeline,
             commands::settings::get_providers,
             commands::settings::save_provider,
-            commands::settings::set_active_provider,
             commands::settings::test_provider,
             commands::settings::get_active_model,
             commands::settings::set_active_model,

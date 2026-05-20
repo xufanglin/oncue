@@ -101,7 +101,7 @@ pub fn load_context(model_path: &Path) -> Result<Arc<WhisperContext>> {
 
 // ── Transcription helpers ─────────────────────────────────────────────────────
 
-fn build_params<'a>(opts: &'a AsrOptions) -> FullParams<'a, 'static> {
+fn build_params<'a>(opts: &'a AsrOptions) -> FullParams<'a, 'a> {
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
     params.set_print_progress(false);
     params.set_print_realtime(false);
@@ -120,10 +120,7 @@ fn build_params<'a>(opts: &'a AsrOptions) -> FullParams<'a, 'static> {
 
     match &opts.language {
         Some(lang) if lang != "auto" => {
-            // The string reference must outlive params; we leak it for the duration
-            // of transcription. Acceptable because it's at most a few bytes.
-            let lang_static: &'static str = Box::leak(lang.clone().into_boxed_str());
-            params.set_language(Some(lang_static));
+            params.set_language(Some(lang.as_str()));
         }
         _ => {
             params.set_language(Some("auto"));

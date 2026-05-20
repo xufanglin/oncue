@@ -1,4 +1,5 @@
 use anyhow::{Result, anyhow};
+use tokio_util::sync::CancellationToken;
 
 use super::{TranslateContext, TranslateError, TranslateProvider};
 
@@ -101,6 +102,9 @@ fn parse_marker(line: &str) -> Option<(usize, &str)> {
 /// On a chunk failure (parse error or provider error), retry up to
 /// `MAX_CHUNK_RETRIES`. After that, fall back to single-line translation
 /// (still numbered, chunk size 1).
+///
+/// `cancel` is checked after every chunk; returns `TranslateError::Cancelled`
+/// if triggered.
 pub async fn translate_in_chunks(
     provider: &dyn TranslateProvider,
     entries: &[String],
@@ -108,12 +112,17 @@ pub async fn translate_in_chunks(
     source_lang: Option<&str>,
     chunk_size: usize,
     mut on_progress: impl FnMut(usize, usize),
+    cancel: CancellationToken,
 ) -> Result<Vec<String>, TranslateError> {
     let chunk_size = chunk_size.max(1);
     let mut out: Vec<String> = Vec::with_capacity(entries.len());
     let total = entries.len();
 
     for window in entries.chunks(chunk_size) {
+        if cancel.is_cancelled() {
+            return Err(TranslateError::Cancelled);
+        }
+
         let history: Vec<String> = out
             .iter()
             .rev()
@@ -131,9 +140,15 @@ pub async fn translate_in_chunks(
         let chunk_vec: Vec<String> = window.to_vec();
         match try_chunk(provider, &chunk_vec, &ctx, MAX_CHUNK_RETRIES).await {
             Ok(translated) => out.extend(translated),
+            // Rate limit errors propagate immediately — single-line fallback
+            // would be throttled too, and the caller should surface the error.
+            Err(e @ TranslateError::RateLimited) => return Err(e),
             Err(_) => {
-                // fallback: single-line
+                // fallback: single-line for malformed/parse failures
                 for line in &chunk_vec {
+                    if cancel.is_cancelled() {
+                        return Err(TranslateError::Cancelled);
+                    }
                     let single = vec![line.clone()];
                     let translated = try_chunk(provider, &single, &ctx, MAX_CHUNK_RETRIES).await?;
                     out.extend(translated);
@@ -166,7 +181,12 @@ async fn try_chunk(
             Err(e) => last_err = Some(e),
         }
         if attempt < retries {
-            let backoff_ms = 200u64 * (1 << attempt);
+            let backoff_ms = if matches!(last_err, Some(TranslateError::RateLimited)) {
+                // 429: wait 5s, 15s, 45s — well beyond API rate limit reset windows
+                5_000u64 * (1 << attempt.min(2))
+            } else {
+                200u64 * (1 << attempt)
+            };
             tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
         }
     }
@@ -225,5 +245,111 @@ mod tests {
         assert!(sys.contains("中文"));
         assert!(user.contains("[[1]] hello"));
         assert!(user.contains("[[2]] world"));
+    }
+
+    // ── Cancellation ──────────────────────────────────────────────────────────
+
+    use async_trait::async_trait;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingProvider {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl TranslateProvider for CountingProvider {
+        async fn translate(
+            &self,
+            chunk: &[String],
+            _ctx: &TranslateContext,
+        ) -> Result<Vec<String>, TranslateError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(chunk.iter().map(|s| format!("T:{s}")).collect())
+        }
+        async fn ping(&self) -> Result<(), TranslateError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn cancel_before_first_chunk_returns_immediately() {
+        let p = CountingProvider {
+            calls: AtomicUsize::new(0),
+        };
+        let lines: Vec<String> = (0..50).map(|i| format!("line {i}")).collect();
+        let cancel = CancellationToken::new();
+        cancel.cancel(); // already cancelled
+
+        let res = translate_in_chunks(&p, &lines, "中文", None, 10, |_, _| {}, cancel).await;
+
+        assert!(matches!(res, Err(TranslateError::Cancelled)));
+        // Provider must not be called at all.
+        assert_eq!(p.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn cancel_between_chunks_stops_progress() {
+        // Cancel after the first chunk completes — second chunk must not run.
+        let p = CountingProvider {
+            calls: AtomicUsize::new(0),
+        };
+        let lines: Vec<String> = (0..30).map(|i| format!("line {i}")).collect();
+        let cancel = CancellationToken::new();
+        let cancel_clone = cancel.clone();
+
+        let res = translate_in_chunks(
+            &p,
+            &lines,
+            "中文",
+            None,
+            10,
+            move |current, _total| {
+                // Trip the token after first chunk's progress callback fires.
+                if current >= 10 {
+                    cancel_clone.cancel();
+                }
+            },
+            cancel,
+        )
+        .await;
+
+        assert!(matches!(res, Err(TranslateError::Cancelled)));
+        // First chunk ran (1 call); second chunk should be skipped.
+        assert_eq!(p.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn rate_limited_propagates_without_fallback() {
+        // Verify that RateLimited error is NOT swallowed by single-line fallback.
+        // `start_paused` skips the 5s/15s/45s backoff sleeps via tokio's virtual clock.
+        struct RateLimitedProvider;
+        #[async_trait]
+        impl TranslateProvider for RateLimitedProvider {
+            async fn translate(
+                &self,
+                _chunk: &[String],
+                _ctx: &TranslateContext,
+            ) -> Result<Vec<String>, TranslateError> {
+                Err(TranslateError::RateLimited)
+            }
+            async fn ping(&self) -> Result<(), TranslateError> {
+                Ok(())
+            }
+        }
+
+        let p = RateLimitedProvider;
+        let lines: Vec<String> = (0..3).map(|i| format!("line {i}")).collect();
+        let res = translate_in_chunks(
+            &p,
+            &lines,
+            "中文",
+            None,
+            5,
+            |_, _| {},
+            CancellationToken::new(),
+        )
+        .await;
+
+        assert!(matches!(res, Err(TranslateError::RateLimited)));
     }
 }

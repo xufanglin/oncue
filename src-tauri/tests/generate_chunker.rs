@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use async_trait::async_trait;
 use oncue_lib::translate::chunker::translate_in_chunks;
 use oncue_lib::translate::{TranslateContext, TranslateError, TranslateProvider};
+use tokio_util::sync::CancellationToken;
 
 // ── Mock providers ────────────────────────────────────────────────────────────
 
@@ -83,9 +84,17 @@ fn inputs(n: usize) -> Vec<String> {
 async fn chunked_basic_count_preserved() {
     let p = OkProvider;
     let lines = inputs(75);
-    let out = translate_in_chunks(&p, &lines, "中文", Some("English"), 30, |_, _| {})
-        .await
-        .unwrap();
+    let out = translate_in_chunks(
+        &p,
+        &lines,
+        "中文",
+        Some("English"),
+        30,
+        |_, _| {},
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
     assert_eq!(out.len(), 75);
     for (i, s) in out.iter().enumerate() {
         assert_eq!(s, &format!("T:line {i}"));
@@ -101,9 +110,17 @@ async fn chunked_retries_recovers() {
         calls: AtomicUsize::new(0),
     };
     let lines = inputs(5);
-    let out = translate_in_chunks(&p, &lines, "中文", None, 5, |_, _| {})
-        .await
-        .unwrap();
+    let out = translate_in_chunks(
+        &p,
+        &lines,
+        "中文",
+        None,
+        5,
+        |_, _| {},
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
     assert_eq!(out.len(), 5);
     assert_eq!(out[0], "T:line 0");
 }
@@ -113,9 +130,17 @@ async fn chunked_falls_back_to_single_line() {
     // Multi-line always fails; single-line succeeds. Driver must fall back.
     let p = OnlySingleLineProvider;
     let lines = inputs(7);
-    let out = translate_in_chunks(&p, &lines, "中文", None, 5, |_, _| {})
-        .await
-        .unwrap();
+    let out = translate_in_chunks(
+        &p,
+        &lines,
+        "中文",
+        None,
+        5,
+        |_, _| {},
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
     assert_eq!(out.len(), 7);
     for (i, s) in out.iter().enumerate() {
         assert_eq!(s, &format!("T:line {i}"));
@@ -128,9 +153,17 @@ async fn chunked_progress_reports_total_and_advances() {
     let p = OkProvider;
     let lines = inputs(60);
     let progress: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
-    let _ = translate_in_chunks(&p, &lines, "中文", None, 20, |c, t| {
-        progress.lock().unwrap().push((c, t));
-    })
+    let _ = translate_in_chunks(
+        &p,
+        &lines,
+        "中文",
+        None,
+        20,
+        |c, t| {
+            progress.lock().unwrap().push((c, t));
+        },
+        CancellationToken::new(),
+    )
     .await
     .unwrap();
     let p = progress.lock().unwrap();

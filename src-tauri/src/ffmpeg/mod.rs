@@ -382,4 +382,112 @@ mod tests {
         );
         assert_eq!(parse_major_version("ffmpeg version 4.4.0"), Some(4));
     }
+
+    // ── parse_subtitle_streams ────────────────────────────────────────────────
+
+    #[test]
+    fn parse_subs_basic_subrip() {
+        let banner = "  Stream #0:2(eng): Subtitle: subrip (default)";
+        let streams = parse_subtitle_streams(banner);
+        assert_eq!(streams.len(), 1);
+        assert_eq!(streams[0].index, 0);
+        assert_eq!(streams[0].codec, "subrip");
+        assert_eq!(streams[0].language.as_deref(), Some("eng"));
+        assert!(streams[0].default);
+        assert!(!streams[0].forced);
+        assert!(streams[0].title.is_none());
+    }
+
+    #[test]
+    fn parse_subs_multiple_with_languages() {
+        let banner = "\
+  Stream #0:2(eng): Subtitle: subrip (default)
+  Stream #0:3(chi): Subtitle: ass
+  Stream #0:4(jpn): Subtitle: mov_text (forced)
+";
+        let streams = parse_subtitle_streams(banner);
+        assert_eq!(streams.len(), 3);
+        assert_eq!(streams[0].index, 0);
+        assert_eq!(streams[0].language.as_deref(), Some("eng"));
+        assert_eq!(streams[1].index, 1);
+        assert_eq!(streams[1].codec, "ass");
+        assert_eq!(streams[1].language.as_deref(), Some("chi"));
+        assert_eq!(streams[2].index, 2);
+        assert_eq!(streams[2].codec, "mov_text");
+        assert!(streams[2].forced);
+    }
+
+    #[test]
+    fn parse_subs_bitmap_filtered_but_index_advances() {
+        // PGS / hdmv_pgs_subtitle should be filtered out, but the next
+        // text-subtitle's `0:s:N` index must reflect ALL subtitle streams.
+        let banner = "\
+  Stream #0:2(eng): Subtitle: hdmv_pgs_subtitle
+  Stream #0:3(chi): Subtitle: subrip
+";
+        let streams = parse_subtitle_streams(banner);
+        assert_eq!(streams.len(), 1);
+        // Bitmap was index 0; subrip is at index 1 in `0:s:N` numbering.
+        assert_eq!(streams[0].index, 1);
+        assert_eq!(streams[0].codec, "subrip");
+        assert_eq!(streams[0].language.as_deref(), Some("chi"));
+    }
+
+    #[test]
+    fn parse_subs_title_metadata_attached() {
+        let banner = "\
+  Stream #0:2(eng): Subtitle: subrip (default)
+    Metadata:
+      title           : English SDH
+  Stream #0:3(chi): Subtitle: ass
+    Metadata:
+      title           : 简体中文
+";
+        let streams = parse_subtitle_streams(banner);
+        assert_eq!(streams.len(), 2);
+        assert_eq!(streams[0].title.as_deref(), Some("English SDH"));
+        assert_eq!(streams[1].title.as_deref(), Some("简体中文"));
+    }
+
+    #[test]
+    fn parse_subs_no_language_tag() {
+        let banner = "  Stream #0:0: Subtitle: subrip";
+        let streams = parse_subtitle_streams(banner);
+        assert_eq!(streams.len(), 1);
+        assert!(streams[0].language.is_none());
+    }
+
+    #[test]
+    fn parse_subs_ignores_audio_video() {
+        let banner = "\
+  Stream #0:0(und): Video: h264, yuv420p
+  Stream #0:1(eng): Audio: aac, 48000 Hz
+  Stream #0:2(eng): Subtitle: subrip
+";
+        let streams = parse_subtitle_streams(banner);
+        assert_eq!(streams.len(), 1);
+        assert_eq!(streams[0].codec, "subrip");
+        assert_eq!(streams[0].index, 0);
+    }
+
+    #[test]
+    fn parse_subs_empty_banner() {
+        assert_eq!(parse_subtitle_streams("").len(), 0);
+        assert_eq!(parse_subtitle_streams("no streams here").len(), 0);
+    }
+
+    #[test]
+    fn parse_subs_title_does_not_leak_to_next_stream() {
+        // Title metadata after Stream A should NOT attach to Stream B.
+        let banner = "\
+  Stream #0:0(eng): Subtitle: subrip
+    Metadata:
+      title           : Track A
+  Stream #0:1(jpn): Subtitle: ass
+";
+        let streams = parse_subtitle_streams(banner);
+        assert_eq!(streams.len(), 2);
+        assert_eq!(streams[0].title.as_deref(), Some("Track A"));
+        assert!(streams[1].title.is_none());
+    }
 }

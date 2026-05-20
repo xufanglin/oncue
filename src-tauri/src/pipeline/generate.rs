@@ -19,30 +19,7 @@ use crate::translate::{
     chunker::{DEFAULT_CHUNK_SIZE, translate_in_chunks},
 };
 
-// ── Progress event ────────────────────────────────────────────────────────────
-
-#[derive(Clone, Serialize)]
-#[serde(tag = "stage", rename_all = "snake_case")]
-#[allow(dead_code)]
-pub enum ProgressEvent {
-    ExtractAudio {
-        percent: u8,
-    },
-    Asr {
-        percent: u8,
-        partial: Option<String>,
-    },
-    Translate {
-        current: usize,
-        total: usize,
-    },
-    WriteOutput {
-        done: bool,
-    },
-    Error {
-        message: String,
-    },
-}
+use super::ProgressEvent;
 
 fn emit(app: &AppHandle, ev: ProgressEvent) {
     let _ = app.emit("pipeline:progress", ev);
@@ -376,6 +353,7 @@ pub async fn run(
                 ProgressEvent::Translate { current, total },
             );
         },
+        cancel.clone(),
     )
     .await
     .map_err(|e| match e {

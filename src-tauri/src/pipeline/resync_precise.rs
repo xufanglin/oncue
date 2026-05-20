@@ -18,29 +18,7 @@ use crate::srt::{
 // ── NW bandwidth ──────────────────────────────────────────────────────────────
 const NW_BANDWIDTH: usize = 500;
 
-// ── Progress event (reuse same shape as fast mode) ────────────────────────────
-
-#[derive(Clone, Serialize)]
-#[serde(tag = "stage", rename_all = "snake_case")]
-#[allow(dead_code)]
-pub enum ProgressEvent {
-    ExtractAudio {
-        percent: u8,
-    },
-    Asr {
-        percent: u8,
-        partial: Option<String>,
-    },
-    Align {
-        percent: u8,
-    },
-    WriteOutput {
-        done: bool,
-    },
-    Error {
-        message: String,
-    },
-}
+use super::ProgressEvent;
 
 fn emit(app: &AppHandle, ev: ProgressEvent) {
     let _ = app.emit("pipeline:progress", ev);

@@ -15,6 +15,8 @@ function App() {
   const [ready, setReady] = useState(false);
   const [sys, setSys] = useState<SystemStatus | null>(null);
 
+  const handleReady = useCallback(() => setReady(true), []);
+
   const refreshStatus = useCallback(() => {
     invoke<SystemStatus>("system_check").then(setSys);
   }, []);
@@ -25,7 +27,7 @@ function App() {
 
   return (
     <main className="flex min-h-screen flex-col items-center justify-start bg-background text-foreground p-6">
-      <ModelSetupDialog onReady={() => setReady(true)} />
+      <ModelSetupDialog onReady={handleReady} />
       {ready && (
         <>
           <div className="relative w-full max-w-xl mb-4 flex items-center justify-center">

@@ -329,15 +329,21 @@ fn enforce_monotone(timings: &mut [Option<NewTiming>], entries: &[SrtEntry]) {
         if let (Some(prev), Some(curr)) = (&timings[i - 1].clone(), &timings[i])
             && curr.start < prev.start
         {
-            tracing::warn!("NW timecode regression at entry {i}: revert both to original");
-            timings[i - 1] = Some(NewTiming {
-                start: entries[i - 1].start,
-                end: entries[i - 1].end,
-                from_alignment: false,
-            });
+            // Revert only the regressing entry. Clamp start to max(original, prev.start)
+            // so the output is always monotone even if the original SRT timestamp is
+            // also earlier than the (already-aligned) previous entry.
+            let orig_start_ms = entries[i].start.as_millis() as i64;
+            let prev_start_ms = prev.start.as_millis() as i64;
+            let clamped_ms = orig_start_ms.max(prev_start_ms);
+            let orig_dur_ms =
+                (entries[i].end.as_millis() as i64 - entries[i].start.as_millis() as i64)
+                    .max(100);
+            tracing::warn!(
+                "NW timecode regression at entry {i}: revert to original (clamped to {clamped_ms}ms)"
+            );
             timings[i] = Some(NewTiming {
-                start: entries[i].start,
-                end: entries[i].end,
+                start: Duration::from_millis(clamped_ms as u64),
+                end: Duration::from_millis((clamped_ms + orig_dur_ms) as u64),
                 from_alignment: false,
             });
         }
@@ -490,6 +496,101 @@ mod tests {
             start_ms,
             end_ms,
             text: text.to_string(),
+        }
+    }
+
+    // ── enforce_monotone direct tests (clamp behavior) ───────────────────────
+
+    #[test]
+    fn enforce_monotone_clamps_to_prev_when_original_also_regresses() {
+        // Pathological case: original SRT timestamps are already monotone
+        // (1000, 3000), but NW pushed entry 0 to 5000ms while entry 1 stayed
+        // at 4000ms — a regression. Reverting entry 1 to its original 3000ms
+        // would still violate monotonicity (3000 < 5000). The clamp must
+        // bump entry 1 up to 5000ms (== prev.start) instead.
+        let entries = vec![
+            make_entry(1, 1000, 2000, "a"),
+            make_entry(2, 3000, 4000, "b"),
+        ];
+        let mut timings: Vec<Option<NewTiming>> = vec![
+            Some(NewTiming {
+                start: Duration::from_millis(5000),
+                end: Duration::from_millis(5500),
+                from_alignment: true,
+            }),
+            Some(NewTiming {
+                start: Duration::from_millis(4000),
+                end: Duration::from_millis(4500),
+                from_alignment: true,
+            }),
+        ];
+        enforce_monotone(&mut timings, &entries);
+
+        let t1 = timings[1].as_ref().unwrap();
+        assert!(
+            t1.start >= Duration::from_millis(5000),
+            "entry 1 must be clamped to >= prev.start (5000ms), got {:?}",
+            t1.start
+        );
+        assert!(!t1.from_alignment);
+        // Duration preserved: 4000-3000 = 1000ms
+        assert_eq!(t1.end - t1.start, Duration::from_millis(1000));
+    }
+
+    #[test]
+    fn enforce_monotone_uses_original_when_it_satisfies_constraint() {
+        // Common case: NW regression but original SRT timestamp is later than
+        // prev.start, so clamp picks the original.
+        let entries = vec![
+            make_entry(1, 1000, 1500, "a"),
+            make_entry(2, 3000, 4000, "b"), // original 3000 > prev (1200)
+        ];
+        let mut timings: Vec<Option<NewTiming>> = vec![
+            Some(NewTiming {
+                start: Duration::from_millis(1200),
+                end: Duration::from_millis(1500),
+                from_alignment: true,
+            }),
+            Some(NewTiming {
+                start: Duration::from_millis(800), // regression!
+                end: Duration::from_millis(1000),
+                from_alignment: true,
+            }),
+        ];
+        enforce_monotone(&mut timings, &entries);
+
+        let t1 = timings[1].as_ref().unwrap();
+        assert_eq!(t1.start, Duration::from_millis(3000));
+        assert!(!t1.from_alignment);
+    }
+
+    #[test]
+    fn enforce_monotone_leaves_valid_alignments_untouched() {
+        let entries = vec![
+            make_entry(1, 1000, 2000, "a"),
+            make_entry(2, 3000, 4000, "b"),
+        ];
+        let mut timings: Vec<Option<NewTiming>> = vec![
+            Some(NewTiming {
+                start: Duration::from_millis(1100),
+                end: Duration::from_millis(2100),
+                from_alignment: true,
+            }),
+            Some(NewTiming {
+                start: Duration::from_millis(3100),
+                end: Duration::from_millis(4100),
+                from_alignment: true,
+            }),
+        ];
+        let before = timings.clone();
+        enforce_monotone(&mut timings, &entries);
+        // No regression → no change.
+        for (a, b) in before.iter().zip(timings.iter()) {
+            let a = a.as_ref().unwrap();
+            let b = b.as_ref().unwrap();
+            assert_eq!(a.start, b.start);
+            assert_eq!(a.end, b.end);
+            assert_eq!(a.from_alignment, b.from_alignment);
         }
     }
 }

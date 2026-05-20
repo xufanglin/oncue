@@ -81,7 +81,7 @@ export function FfmpegSetup({ onReady }: Props) {
             <span className="flex-1 text-xs text-muted-foreground">
               ffmpeg ·{" "}
               {progress.total > 0
-                ? `${(progress.total / 1024 / 1024).toFixed(0)} MB`
+                ? `${(progress.downloaded / 1024 / 1024).toFixed(1)} / ${(progress.total / 1024 / 1024).toFixed(0)} MB`
                 : `${(progress.downloaded / 1024 / 1024).toFixed(1)} MB`}
             </span>
             <ProgressRing

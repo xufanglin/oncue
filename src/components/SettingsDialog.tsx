@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Settings as SettingsIcon } from "lucide-react";
@@ -179,17 +179,7 @@ function ProviderTab({ open }: { open: boolean }) {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    invoke<Providers>("get_providers").then((p) => {
-      const active = p.active ?? "openai_official";
-      setType(active);
-      loadInto(active, p);
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
-
-  const loadInto = (t: ProviderType, p: Providers) => {
+  const loadInto = useCallback((t: ProviderType, p: Providers) => {
     const cfg = p[t];
     if (cfg) {
       setApiKey("api_key" in cfg ? cfg.api_key : "");
@@ -202,7 +192,16 @@ function ProviderTab({ open }: { open: boolean }) {
     }
     setMessage(null);
     setError(null);
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    invoke<Providers>("get_providers").then((p) => {
+      const active = p.active ?? "openai_official";
+      setType(active);
+      loadInto(active, p);
+    });
+  }, [open, loadInto]);
 
   const handleTypeChange = async (t: string) => {
     const next = t as ProviderType;
@@ -330,25 +329,27 @@ function ModelTab({
   const [active, setActive] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     const list = await invoke<ModelStatus[]>("list_models");
     setModels(list);
     const cur = await invoke<string | null>("get_active_model");
     if (cur) setActive(cur);
-    else if (list.find((m) => m.present))
-      setActive(list.find((m) => m.present)!.name);
-  };
+    else {
+      const first = list.find((m) => m.present);
+      if (first) setActive(first.name);
+    }
+  }, []);
 
   useEffect(() => {
     if (!open) return;
     refresh();
-  }, [open]);
+  }, [open, refresh]);
 
   // Refresh model list when a download finishes so the row flips to "已下载".
   useEffect(() => {
     if (progress?.done) refresh();
     if (progress?.error) setError(progress.error);
-  }, [progress?.done, progress?.error]);
+  }, [progress?.done, progress?.error, refresh]);
 
   // The currently downloading model name, or null. Driven by the hoisted
   // progress state so it survives tab switches.
@@ -502,7 +503,7 @@ function FfmpegTab({
           <span className="flex-1 text-xs text-muted-foreground">
             ffmpeg ·{" "}
             {progress.total > 0
-              ? `${(progress.total / 1024 / 1024).toFixed(0)} MB`
+              ? `${(progress.downloaded / 1024 / 1024).toFixed(1)} / ${(progress.total / 1024 / 1024).toFixed(0)} MB`
               : `${(progress.downloaded / 1024 / 1024).toFixed(1)} MB`}
           </span>
           <ProgressRing
