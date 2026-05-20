@@ -1,6 +1,6 @@
 [package]
 name = "oncue"
-version = "0.1.1"
+version = "0.1.2"
 description = "Subtitle resync and bilingual generation for macOS"
 authors = ["xufanglin"]
 edition = "2024"
